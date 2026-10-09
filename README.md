@@ -85,7 +85,7 @@ Environment overview (oc-mirror version, environment status, pull secret status)
 
 Visual configuration builder with tabs for Platform Channels, Operators, Additional Images, YAML Preview, and file upload.
 
-- **Adding operators** - Select from pre-fetched catalogs (OCP 4.16–4.22) with Red Hat, Certified, and Community operator indexes. Automatic dependency detection with one-click add.
+- **Adding operators** - Select from pre-fetched catalogs (OCP 4.16–4.22) with Red Hat, Certified, and Community operator indexes. Automatic dependency detection for the selected channel, including dependencies of dependencies and required APIs resolved to the operator that provides them; required APIs that cannot be resolved are shown as a warning.
 - **YAML preview and editing** - Preview the generated `ImageSetConfiguration` YAML, copy to clipboard, or edit directly. Set an optional archive size limit (in GiB).
 - **Upload existing YAML** - Import an existing `ImageSetConfiguration` YAML file, review and edit it, then save or load it into the form editor.
 

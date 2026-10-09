@@ -1,0 +1,3 @@
+{"schema": "olm.package", "name": "beta", "defaultChannel": "stable-1"}
+{"schema": "olm.channel", "package": "beta", "name": "stable-1", "entries": [{"name": "beta.v1.2.0"}]}
+{"schema": "olm.bundle", "package": "beta", "name": "beta.v1.2.0", "image": "registry.example.com/beta.v1.2.0", "properties": [{"type": "olm.package", "value": {"packageName": "beta", "version": "1.2.0"}}, {"type": "olm.gvk.required", "value": {"group": "epsilon.example.com", "version": "v1", "kind": "Eps"}}]}

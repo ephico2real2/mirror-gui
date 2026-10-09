@@ -145,7 +145,7 @@ interface CleanConfig {
       packages: {
         name: string;
         defaultChannel?: string;
-        channels: CleanOperatorChannel[];
+        channels?: CleanOperatorChannel[];
       }[];
     }[];
     additionalImages?: { name: string }[];
@@ -428,7 +428,7 @@ const generateDefaultConfigName = (): string => {
 };
 
 const MirrorConfig: React.FC = () => {
-  const { addSuccessAlert, addDangerAlert, addInfoAlert } = useAlerts();
+  const { addSuccessAlert, addDangerAlert, addInfoAlert, addWarningAlert } = useAlerts();
 
   const [config, setConfig] = useState<ImageSetConfig>({
     kind: 'ImageSetConfiguration',
@@ -865,62 +865,90 @@ const MirrorConfig: React.FC = () => {
     if (field === 'name' && value) {
       const operator = config.mirror.operators[operatorIndex];
       await fetchOperatorChannels(value, operator.catalog);
+      await addDependencyPackages(operatorIndex, value);
+    }
+  };
 
-      try {
-        const catalogVersion = operator.catalog.split(':').pop() || 'v4.19';
-        const depRes = await axios.get(`/api/operators/${value}/dependencies`, {
-          params: { catalogUrl: operator.catalog },
-        });
+  /**
+   * Adds the dependencies of `packageName` (for `channel`, or its default channel) as packages of
+   * the same catalog. The server follows dependencies of dependencies and resolves required APIs
+   * to the package that provides them; APIs it cannot resolve are reported, not guessed.
+   */
+  const addDependencyPackages = async (operatorIndex: number, packageName: string, channel?: string) => {
+    const operator = config.mirror.operators[operatorIndex];
+    if (!operator) {
+      return;
+    }
+    try {
+      const depRes = await axios.get(`/api/operators/${packageName}/dependencies`, {
+        params: { catalogUrl: operator.catalog, ...(channel ? { channel } : {}) },
+      });
 
-        if (depRes.data?.dependencies?.length > 0) {
-          const deps = depRes.data.dependencies as {
-            packageName: string;
-            defaultChannel?: string;
-          }[];
-          const vMatch = catalogVersion.match(/v?(\d+\.\d+)/);
-          const defaultCh = vMatch ? `stable-${vMatch[1]}` : 'stable';
-
-          setConfig(prev => {
-            const existing = new Set(
-              prev.mirror.operators[operatorIndex].packages.map(p => p.name).filter(Boolean),
-            );
-
-            const newDeps: OperatorPackage[] = deps
-              .filter(d => !existing.has(d.packageName))
-              .map(d => ({
-                name: d.packageName,
-                channels: [{ name: d.defaultChannel || defaultCh, minVersion: '' }],
-                autoAddedBy: value,
-                isDependency: true,
-              }));
-
-            if (newDeps.length > 0) {
-              setTimeout(async () => {
-                for (const dep of newDeps) {
-                  await fetchOperatorChannels(dep.name, operator.catalog);
-                }
-              }, 0);
-
-              addSuccessAlert(`Auto-added ${newDeps.length} dependency package(s) for ${value}`);
-
-              return {
-                ...prev,
-                mirror: {
-                  ...prev.mirror,
-                  operators: prev.mirror.operators.map((op, i) =>
-                    i === operatorIndex
-                      ? { ...op, packages: [...op.packages, ...newDeps] }
-                      : op,
-                  ),
-                },
-              };
-            }
-            return prev;
-          });
-        }
-      } catch {
-        // Ignore dependency lookups that fail during intermediate form edits.
+      const unresolved = (depRes.data?.unresolvedApis ?? []) as {
+        api: string;
+        candidates: string[];
+        requiredBy: string;
+      }[];
+      if (unresolved.length > 0) {
+        const details = unresolved
+          .map((u) =>
+            u.candidates.length > 0
+              ? `${u.api} (needed by ${u.requiredBy}; provided by ${u.candidates.join(' or ')})`
+              : `${u.api} (needed by ${u.requiredBy}; no package in this catalog provides it)`,
+          )
+          .join('; ');
+        addWarningAlert(`${packageName}: check these required APIs by hand: ${details}`);
       }
+
+      const deps = (depRes.data?.dependencies ?? []) as {
+        packageName: string;
+        defaultChannel?: string;
+        requiredBy?: string;
+      }[];
+      if (deps.length === 0) {
+        return;
+      }
+
+      setConfig((prev) => {
+        const existing = new Set(
+          prev.mirror.operators[operatorIndex].packages.map((p) => p.name).filter(Boolean),
+        );
+
+        const newDeps: OperatorPackage[] = deps
+          .filter((d) => !existing.has(d.packageName))
+          .map((d) => ({
+            name: d.packageName,
+            // The package's real default channel; with none known, list the package without a
+            // channel filter so oc-mirror takes the head of every channel instead of a guessed name.
+            channels: d.defaultChannel ? [{ name: d.defaultChannel, minVersion: '' }] : [],
+            autoAddedBy: d.requiredBy && d.requiredBy !== packageName ? d.requiredBy : packageName,
+            isDependency: true,
+          }));
+
+        if (newDeps.length === 0) {
+          return prev;
+        }
+
+        setTimeout(async () => {
+          for (const dep of newDeps) {
+            await fetchOperatorChannels(dep.name, operator.catalog);
+          }
+        }, 0);
+
+        addSuccessAlert(`Auto-added ${newDeps.length} dependency package(s) for ${packageName}`);
+
+        return {
+          ...prev,
+          mirror: {
+            ...prev.mirror,
+            operators: prev.mirror.operators.map((op, i) =>
+              i === operatorIndex ? { ...op, packages: [...op.packages, ...newDeps] } : op,
+            ),
+          },
+        };
+      });
+    } catch {
+      // Ignore dependency lookups that fail during intermediate form edits.
     }
   };
 
@@ -988,6 +1016,8 @@ const MirrorConfig: React.FC = () => {
         const versions = await fetchChannelVersions(packageName, value, operator.catalog);
         const key = `${packageName}:${value}:${operator.catalog}`;
         setAvailableVersions(prev => ({ ...prev, [key]: versions }));
+        // A different channel can have different dependencies.
+        await addDependencyPackages(operatorIndex, packageName, value);
       }
     }
   };
@@ -1141,14 +1171,17 @@ const MirrorConfig: React.FC = () => {
           const needsDefaultOverride = originalDefault
             && !selectedChannelNames.includes(originalDefault);
 
-          const cleanPkg: { name: string; defaultChannel?: string; channels: CleanOperatorChannel[] } = {
+          const cleanPkg: { name: string; defaultChannel?: string; channels?: CleanOperatorChannel[] } = {
             name: pkg.name,
-            channels: pkg.channels.map(ch => {
+          };
+          // No channel filter means oc-mirror takes the head of every channel; leave the key out.
+          if (pkg.channels.length > 0) {
+            cleanPkg.channels = pkg.channels.map(ch => {
               const c: CleanOperatorChannel = { name: ch.name };
               if (ch.minVersion?.trim()) c.minVersion = ch.minVersion;
               return c;
-            }),
-          };
+            });
+          }
 
           if (needsDefaultOverride && selectedChannelNames.length > 0) {
             cleanPkg.defaultChannel = selectedChannelNames[0];

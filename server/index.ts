@@ -657,6 +657,124 @@ async function getActualChannelsFromCatalog(catalogType: string, catalogVersion:
 
 let dependenciesDataCache: Record<string, Record<string, OperatorDependency[]>> | null = null;
 
+interface DependencyGraphEdge {
+  packageName: string;
+  versionRange?: string | null;
+  reason: 'package' | 'api';
+  api?: string;
+}
+
+interface DependencyGraphChannel {
+  headVersion?: string | null;
+  dependencies: DependencyGraphEdge[];
+  unresolvedApis: { api: string; candidates: string[] }[];
+}
+
+interface DependencyGraphPackage {
+  defaultChannel?: string | null;
+  channels: Record<string, DependencyGraphChannel>;
+}
+
+type DependencyGraph = Record<string, DependencyGraphPackage>;
+
+let dependencyGraphCache: Record<string, DependencyGraph> | null = null;
+
+/** Per-catalog dependency-graph.json files (written by scripts/catalog_metadata.py generate). */
+async function loadDependencyGraphs(): Promise<Record<string, DependencyGraph>> {
+  if (dependencyGraphCache) {
+    return dependencyGraphCache;
+  }
+  const merged: Record<string, DependencyGraph> = {};
+  try {
+    const catalogDir = await resolveCatalogDataDir();
+    const catalogIndex = JSON.parse(await fsp.readFile(path.join(catalogDir, 'catalog-index.json'), 'utf8'));
+    for (const catalog of catalogIndex.catalogs) {
+      const graphPath = path.join(catalogDir, `${catalog.catalog_type}/${catalog.ocp_version}/dependency-graph.json`);
+      try {
+        merged[`${catalog.catalog_type}:${catalog.ocp_version}`] = JSON.parse(await fsp.readFile(graphPath, 'utf8'));
+      } catch {
+        // Catalogs synced before dependency-graph.json existed fall back to dependencies.json
+      }
+    }
+  } catch {
+    // No catalog index: callers fall back to dependencies.json
+  }
+  dependencyGraphCache = merged;
+  return merged;
+}
+
+interface ResolvedDependency extends OperatorDependency {
+  reason: 'package' | 'api';
+  api?: string;
+  requiredBy: string;
+  channel?: string | null;
+}
+
+interface DependencyResolution {
+  channel: string | null;
+  dependencies: ResolvedDependency[];
+  unresolvedApis: { api: string; candidates: string[]; requiredBy: string }[];
+}
+
+/**
+ * Transitive dependencies of an operator for the chosen channel (default channel when none or
+ * unknown): package dependencies plus required APIs that exactly one package in the catalog
+ * provides. Each dependency is followed through its own default channel. Returns null when the
+ * catalog has no dependency graph or the operator is not in it.
+ */
+function resolveFromGraph(graph: DependencyGraph, operatorName: string, requestedChannel?: string): DependencyResolution | null {
+  const root = graph[operatorName];
+  if (!root) {
+    return null;
+  }
+  const rootChannel =
+    requestedChannel && root.channels[requestedChannel] ? requestedChannel : root.defaultChannel || null;
+
+  const dependencies: ResolvedDependency[] = [];
+  const unresolvedApis: DependencyResolution['unresolvedApis'] = [];
+  const seen = new Set<string>([operatorName]);
+  const queue: { name: string; channel: string | null }[] = [{ name: operatorName, channel: rootChannel }];
+
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const node = graph[current.name];
+    const channelData = node && current.channel ? node.channels[current.channel] : undefined;
+    if (!channelData) {
+      continue;
+    }
+    for (const edge of channelData.dependencies) {
+      if (seen.has(edge.packageName)) {
+        continue;
+      }
+      seen.add(edge.packageName);
+      const depChannel = graph[edge.packageName]?.defaultChannel || null;
+      dependencies.push({
+        packageName: edge.packageName,
+        versionRange: edge.versionRange ?? null,
+        reason: edge.reason,
+        ...(edge.api ? { api: edge.api } : {}),
+        requiredBy: current.name,
+        defaultChannel: depChannel || undefined,
+        channel: depChannel,
+      });
+      queue.push({ name: edge.packageName, channel: depChannel });
+    }
+    for (const unresolved of channelData.unresolvedApis) {
+      unresolvedApis.push({ ...unresolved, requiredBy: current.name });
+    }
+  }
+
+  // An ambiguous API is settled if one of its candidates is already being added.
+  const added = new Set(dependencies.map((dep) => dep.packageName));
+  return {
+    channel: rootChannel,
+    dependencies,
+    unresolvedApis: unresolvedApis.filter(
+      (entry) => !entry.candidates.some((candidate) => added.has(candidate) || candidate === operatorName),
+    ),
+  };
+}
+
 async function loadDependenciesData(): Promise<Record<string, Record<string, OperatorDependency[]>> | null> {
   if (dependenciesDataCache) {
     return dependenciesDataCache;
@@ -1527,50 +1645,78 @@ app.get('/api/operators/:operator/dependencies', async (req: Request, res: Respo
   try {
     const { operator } = req.params;
     const { catalogUrl } = req.query;
+    const requestedChannel = typeof req.query.channel === 'string' && req.query.channel ? req.query.channel : undefined;
 
-    let dependencies: OperatorDependency[] = [];
-    let catalogType: string | null = null;
-    let catalogVersion: string | null = null;
-
+    const candidates: { catalogType: string; catalogVersion: string }[] = [];
     if (catalogUrl) {
-      catalogType = getCatalogNameFromUrl(catalogUrl as string);
-      catalogVersion = (catalogUrl as string).includes(':') ? (catalogUrl as string).split(':')[1] : 'v4.21';
-
-      dependencies = await getOperatorDependencies(catalogType, catalogVersion, operator);
+      candidates.push({
+        catalogType: getCatalogNameFromUrl(catalogUrl as string),
+        catalogVersion: (catalogUrl as string).includes(':') ? (catalogUrl as string).split(':')[1] : 'v4.21',
+      });
     } else {
       const catalogData = await loadPreFetchedCatalogData();
-      if (catalogData && catalogData.index && catalogData.index.catalogs) {
-        for (const catalog of catalogData.index.catalogs) {
-          const deps = await getOperatorDependencies(
-            catalog.catalog_type,
-            catalog.ocp_version,
-            operator,
-          );
-
-          if (deps.length > 0) {
-            dependencies = deps;
-            catalogType = catalog.catalog_type;
-            catalogVersion = catalog.ocp_version;
-            break;
-          }
-        }
+      for (const catalog of catalogData?.index?.catalogs ?? []) {
+        candidates.push({ catalogType: catalog.catalog_type, catalogVersion: catalog.ocp_version });
       }
     }
 
-    if (dependencies.length === 0) {
-      return res.json({
-        operator,
-        dependencies: [],
-        message: 'No dependencies found for this operator',
-      });
+    const graphs = await loadDependencyGraphs();
+    const catalogData = await loadPreFetchedCatalogData();
+
+    for (const { catalogType, catalogVersion } of candidates) {
+      const graph = graphs[`${catalogType}:${catalogVersion}`];
+      const resolution = graph ? resolveFromGraph(graph, operator, requestedChannel) : null;
+      if (resolution) {
+        const operators = catalogData?.operators[`${catalogType}:${catalogVersion}`] ?? [];
+        for (const dep of resolution.dependencies) {
+          const info = operators.find((op) => op.name === dep.packageName);
+          if (info) {
+            dep.displayName = info.name;
+            dep.catalog = info.catalog;
+            dep.catalogUrl = info.catalogUrl;
+            dep.defaultChannel = dep.defaultChannel || info.defaultChannel;
+          }
+        }
+        if (resolution.dependencies.length === 0 && resolution.unresolvedApis.length === 0 && !catalogUrl) {
+          continue;
+        }
+        return res.json({
+          operator,
+          catalogType,
+          catalogVersion,
+          channel: resolution.channel,
+          resolution: 'graph',
+          dependencies: resolution.dependencies,
+          unresolvedApis: resolution.unresolvedApis,
+          count: resolution.dependencies.length,
+          ...(resolution.dependencies.length === 0 ? { message: 'No dependencies found for this operator' } : {}),
+        });
+      }
+
+      // Catalog data without dependency-graph.json: package dependencies of the default channel head only.
+      const dependencies = await getOperatorDependencies(catalogType, catalogVersion, operator);
+      if (dependencies.length > 0) {
+        return res.json({
+          operator,
+          catalogType,
+          catalogVersion,
+          channel: null,
+          resolution: 'legacy',
+          dependencies,
+          unresolvedApis: [],
+          count: dependencies.length,
+        });
+      }
+      if (catalogUrl) {
+        break;
+      }
     }
 
     res.json({
       operator,
-      catalogType,
-      catalogVersion,
-      dependencies,
-      count: dependencies.length,
+      dependencies: [],
+      unresolvedApis: [],
+      message: 'No dependencies found for this operator',
     });
   } catch (error: unknown) {
     console.error(`Error getting dependencies for ${req.params.operator}:`, error);
@@ -2363,6 +2509,7 @@ app.post('/api/catalogs/sync', async (_req: Request, res: Response) => {
     if (code === 0) {
       preFetchedCatalogData = null;
       dependenciesDataCache = null;
+      dependencyGraphCache = null;
       operatorCache.catalogs = [];
       operatorCache.operators = {};
       operatorCache.channels = {};
@@ -2440,6 +2587,7 @@ app.delete('/api/catalogs/sync/data', async (_req: Request, res: Response) => {
 
     preFetchedCatalogData = null;
     dependenciesDataCache = null;
+    dependencyGraphCache = null;
     operatorCache.catalogs = [];
     operatorCache.operators = {};
     operatorCache.channels = {};

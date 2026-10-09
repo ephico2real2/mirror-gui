@@ -1,0 +1,3 @@
+{"schema": "olm.package", "name": "zeta", "defaultChannel": "stable"}
+{"schema": "olm.channel", "package": "zeta", "name": "stable", "entries": [{"name": "zeta.v1.0.0"}]}
+{"schema": "olm.bundle", "package": "zeta", "name": "zeta.v1.0.0", "image": "registry.example.com/zeta.v1.0.0", "properties": [{"type": "olm.package", "value": {"packageName": "zeta", "version": "1.0.0"}}]}

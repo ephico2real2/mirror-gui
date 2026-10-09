@@ -1,0 +1,3 @@
+{"schema": "olm.package", "name": "eps2", "defaultChannel": "stable"}
+{"schema": "olm.channel", "package": "eps2", "name": "stable", "entries": [{"name": "eps2.v1.0.0"}]}
+{"schema": "olm.bundle", "package": "eps2", "name": "eps2.v1.0.0", "image": "registry.example.com/eps2.v1.0.0", "properties": [{"type": "olm.package", "value": {"packageName": "eps2", "version": "1.0.0"}}, {"type": "olm.gvk", "value": {"group": "epsilon.example.com", "version": "v1", "kind": "Eps"}}]}

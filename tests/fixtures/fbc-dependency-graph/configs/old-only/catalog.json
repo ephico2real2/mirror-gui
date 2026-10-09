@@ -1,0 +1,3 @@
+{"schema": "olm.package", "name": "old-only", "defaultChannel": "stable"}
+{"schema": "olm.channel", "package": "old-only", "name": "stable", "entries": [{"name": "old-only.v1.0.0"}]}
+{"schema": "olm.bundle", "package": "old-only", "name": "old-only.v1.0.0", "image": "registry.example.com/old-only.v1.0.0", "properties": [{"type": "olm.package", "value": {"packageName": "old-only", "version": "1.0.0"}}]}

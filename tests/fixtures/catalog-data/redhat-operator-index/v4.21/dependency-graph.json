@@ -1,0 +1,124 @@
+{
+  "alpha": {
+    "defaultChannel": "stable",
+    "channels": {
+      "fast": {
+        "headVersion": "3.0.0",
+        "dependencies": [
+          {
+            "packageName": "delta",
+            "versionRange": ">=0.0.0",
+            "reason": "package"
+          }
+        ],
+        "unresolvedApis": []
+      },
+      "stable": {
+        "headVersion": "2.0.0",
+        "dependencies": [
+          {
+            "packageName": "beta",
+            "versionRange": ">=1.0.0",
+            "reason": "package"
+          },
+          {
+            "packageName": "gamma",
+            "versionRange": null,
+            "reason": "api",
+            "api": "gamma.example.com/v1/Gamma"
+          }
+        ],
+        "unresolvedApis": [
+          {
+            "api": "monitoring.coreos.com/v1/ServiceMonitor",
+            "candidates": []
+          }
+        ]
+      }
+    }
+  },
+  "beta": {
+    "defaultChannel": "stable-1",
+    "channels": {
+      "stable-1": {
+        "headVersion": "1.2.0",
+        "dependencies": [],
+        "unresolvedApis": [
+          {
+            "api": "epsilon.example.com/v1/Eps",
+            "candidates": [
+              "eps1",
+              "eps2"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "delta": {
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "headVersion": "1.0.0",
+        "dependencies": [],
+        "unresolvedApis": []
+      }
+    }
+  },
+  "eps1": {
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "headVersion": "1.0.0",
+        "dependencies": [],
+        "unresolvedApis": []
+      }
+    }
+  },
+  "eps2": {
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "headVersion": "1.0.0",
+        "dependencies": [],
+        "unresolvedApis": []
+      }
+    }
+  },
+  "gamma": {
+    "defaultChannel": "tech-preview",
+    "channels": {
+      "tech-preview": {
+        "headVersion": "0.5.0",
+        "dependencies": [
+          {
+            "packageName": "zeta",
+            "versionRange": ">=0.0.0",
+            "reason": "package"
+          }
+        ],
+        "unresolvedApis": []
+      }
+    }
+  },
+  "old-only": {
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "headVersion": "1.0.0",
+        "dependencies": [],
+        "unresolvedApis": []
+      }
+    }
+  },
+  "zeta": {
+    "defaultChannel": "stable",
+    "channels": {
+      "stable": {
+        "headVersion": "1.0.0",
+        "dependencies": [],
+        "unresolvedApis": []
+      }
+    }
+  }
+}

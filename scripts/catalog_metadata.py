@@ -39,6 +39,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     generate_parser.add_argument("--ocp-version", required=True, help="Catalog version, e.g. v4.20.")
     generate_parser.add_argument("--operators-file", required=True, help="Output path for operators.json.")
     generate_parser.add_argument("--dependencies-file", required=True, help="Output path for dependencies.json.")
+    generate_parser.add_argument(
+        "--dependency-graph-file",
+        help="Output path for dependency-graph.json (per-channel dependencies, required APIs resolved). Default: next to --dependencies-file.",
+    )
 
     audit_parser = subparsers.add_parser("audit", help="Audit generated metadata against extracted configs.")
     audit_parser.add_argument(
@@ -256,6 +260,47 @@ def normalize_dependencies(dependencies: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
+def format_gvk(value: dict[str, Any]) -> str | None:
+    group = normalize_string(value.get("group"))
+    version = normalize_string(value.get("version"))
+    kind = normalize_string(value.get("kind"))
+    if not version or not kind:
+        return None
+    return f"{group}/{version}/{kind}" if group else f"{version}/{kind}"
+
+
+def bundle_properties(bundle_doc: dict[str, Any]) -> list[dict[str, Any]]:
+    properties = bundle_doc.get("properties")
+    return [prop for prop in properties if is_dict(prop)] if isinstance(properties, list) else []
+
+
+def bundle_requirements(bundle_doc: dict[str, Any]) -> dict[str, Any]:
+    """Package and API requirements of one bundle (olm.package.required, olm.gvk.required)."""
+    packages: list[dict[str, Any]] = []
+    apis: list[str] = []
+    for prop in bundle_properties(bundle_doc):
+        value = prop.get("value")
+        if not is_dict(value):
+            continue
+        if prop.get("type") == "olm.package.required":
+            packages.append({"packageName": value.get("packageName"), "versionRange": value.get("versionRange")})
+        elif prop.get("type") == "olm.gvk.required":
+            gvk = format_gvk(value)
+            if gvk:
+                apis.append(gvk)
+    return {"packages": normalize_dependencies(packages), "apis": sorted(set(apis))}
+
+
+def bundle_provided_apis(bundle_doc: dict[str, Any]) -> set[str]:
+    provided: set[str] = set()
+    for prop in bundle_properties(bundle_doc):
+        if prop.get("type") == "olm.gvk" and is_dict(prop.get("value")):
+            gvk = format_gvk(prop["value"])
+            if gvk:
+                provided.add(gvk)
+    return provided
+
+
 def extract_bundle_version(bundle_doc: dict[str, Any]) -> str | None:
     for prop in bundle_doc.get("properties", []) if isinstance(bundle_doc.get("properties"), list) else []:
         if not is_dict(prop):
@@ -402,6 +447,27 @@ def build_operator_metadata(operator_dir: Path, catalog_type: str, ocp_version: 
             bundle_candidates.sort(key=cmp_to_key(lambda left, right: compare_versions(left[0], right[0])))
             selected_bundle_doc = bundle_candidates[-1][1]
 
+    # Requirements of each channel's head bundle (newest version in the channel),
+    # so a dependency lookup can follow the channel the user picked.
+    channel_requirements: dict[str, dict[str, Any]] = {}
+    for channel_name, docs in channel_docs_by_name.items():
+        head: tuple[str, dict[str, Any]] | None = None
+        for document in docs:
+            for entry in document.get("entries", []) if isinstance(document.get("entries"), list) else []:
+                if not is_dict(entry):
+                    continue
+                bundle_info = bundle_by_name.get(normalize_string(entry.get("name")))
+                if not bundle_info or not bundle_info.get("version"):
+                    continue
+                if head is None or compare_versions(bundle_info["version"], head[0]) > 0:
+                    head = (bundle_info["version"], bundle_info["doc"])
+        if head is not None:
+            channel_requirements[channel_name] = {"headVersion": head[0], **bundle_requirements(head[1])}
+
+    provided_apis: set[str] = set()
+    for info in bundle_by_name.values():
+        provided_apis |= bundle_provided_apis(info["doc"])
+
     dependencies: list[dict[str, Any]] = []
     if selected_bundle_doc:
         dependencies = normalize_dependencies([
@@ -427,30 +493,87 @@ def build_operator_metadata(operator_dir: Path, catalog_type: str, ocp_version: 
         "catalog": catalog_type,
         "ocpVersion": ocp_version,
         "catalogUrl": f"registry.redhat.io/redhat/{catalog_type}:{ocp_version}",
+        # Private: consumed by generate_snapshot_metadata_with_graph, never written to operators.json.
+        "_graph": {"channelRequirements": channel_requirements, "providedApis": sorted(provided_apis)},
     }
 
     return metadata, dependencies, warnings
 
 
-def generate_snapshot_metadata(catalog_dir: Path, catalog_type: str, ocp_version: str) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], list[str]]:
+def build_dependency_graph(graph_inputs: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Per-channel dependencies of every package, with required APIs resolved to the packages providing them.
+
+    graph_inputs maps package name -> {"defaultChannel", "channelRequirements", "providedApis"}.
+    A required API provided by exactly one other package becomes a dependency on that package.
+    One provided by several packages, or by none in this catalog (for example an API the platform
+    itself serves), is listed under unresolvedApis with its candidates instead of being guessed.
+    """
+    providers: dict[str, set[str]] = {}
+    for package_name, info in graph_inputs.items():
+        for api in info.get("providedApis", []):
+            providers.setdefault(api, set()).add(package_name)
+
+    graph: dict[str, Any] = {}
+    for package_name in sorted(graph_inputs):
+        info = graph_inputs[package_name]
+        own_apis = set(info.get("providedApis", []))
+        channels: dict[str, Any] = {}
+        for channel_name, requirements in sorted(info.get("channelRequirements", {}).items()):
+            dependencies: list[dict[str, Any]] = [
+                {"packageName": dep["packageName"], "versionRange": dep["versionRange"], "reason": "package"}
+                for dep in requirements.get("packages", [])
+            ]
+            named = {dep["packageName"] for dep in dependencies}
+            unresolved: list[dict[str, Any]] = []
+            for api in requirements.get("apis", []):
+                if api in own_apis:
+                    continue
+                candidates = sorted(providers.get(api, set()) - {package_name})
+                if any(candidate in named for candidate in candidates):
+                    continue
+                if len(candidates) == 1:
+                    dependencies.append({"packageName": candidates[0], "versionRange": None, "reason": "api", "api": api})
+                    named.add(candidates[0])
+                else:
+                    unresolved.append({"api": api, "candidates": candidates})
+            channels[channel_name] = {
+                "headVersion": requirements.get("headVersion"),
+                "dependencies": dependencies,
+                "unresolvedApis": unresolved,
+            }
+        graph[package_name] = {"defaultChannel": info.get("defaultChannel"), "channels": channels}
+    return graph
+
+
+def generate_snapshot_metadata_with_graph(
+    catalog_dir: Path, catalog_type: str, ocp_version: str
+) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], dict[str, Any], list[str]]:
     configs_dir = catalog_dir / "configs"
     operators: list[dict[str, Any]] = []
     dependencies: dict[str, list[dict[str, Any]]] = {}
+    graph_inputs: dict[str, dict[str, Any]] = {}
     warnings: list[str] = []
 
     if not configs_dir.is_dir():
-        return operators, dependencies, [f"Missing configs directory: {configs_dir}"]
+        return operators, dependencies, {}, [f"Missing configs directory: {configs_dir}"]
 
     for operator_dir in sorted(path for path in configs_dir.iterdir() if path.is_dir()):
         metadata, operator_dependencies, operator_warnings = build_operator_metadata(operator_dir, catalog_type, ocp_version)
         warnings.extend(operator_warnings)
         if metadata is None:
             continue
+        graph_info = metadata.pop("_graph", {})
+        graph_inputs[metadata["name"]] = {"defaultChannel": metadata.get("defaultChannel"), **graph_info}
         operators.append(metadata)
         if operator_dependencies:
             dependencies[metadata["name"]] = operator_dependencies
 
     operators.sort(key=lambda item: item["name"])
+    return operators, dependencies, build_dependency_graph(graph_inputs), warnings
+
+
+def generate_snapshot_metadata(catalog_dir: Path, catalog_type: str, ocp_version: str) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]], list[str]]:
+    operators, dependencies, _graph, warnings = generate_snapshot_metadata_with_graph(catalog_dir, catalog_type, ocp_version)
     return operators, dependencies, warnings
 
 
@@ -780,10 +903,12 @@ def run_generate(args: argparse.Namespace) -> int:
     catalog_dir = Path(args.catalog_dir)
     operators_file = Path(args.operators_file)
     dependencies_file = Path(args.dependencies_file)
-    operators, dependencies, warnings = generate_snapshot_metadata(catalog_dir, args.catalog_type, args.ocp_version)
+    graph_file = Path(args.dependency_graph_file) if args.dependency_graph_file else dependencies_file.with_name("dependency-graph.json")
+    operators, dependencies, graph, warnings = generate_snapshot_metadata_with_graph(catalog_dir, args.catalog_type, args.ocp_version)
 
     write_json(operators_file, operators)
     write_json(dependencies_file, dependencies)
+    write_json(graph_file, graph)
 
     if warnings:
         for warning in warnings:

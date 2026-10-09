@@ -1,0 +1,3 @@
+{"schema": "olm.package", "name": "delta", "defaultChannel": "stable"}
+{"schema": "olm.channel", "package": "delta", "name": "stable", "entries": [{"name": "delta.v1.0.0"}]}
+{"schema": "olm.bundle", "package": "delta", "name": "delta.v1.0.0", "image": "registry.example.com/delta.v1.0.0", "properties": [{"type": "olm.package", "value": {"packageName": "delta", "version": "1.0.0"}}]}
