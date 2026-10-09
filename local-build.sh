@@ -449,6 +449,7 @@ show_help() {
     echo "  IMAGE_VERSION=1.0          Set OCI image version label during build"
     echo "  BUILD_VERSION=1.0          Compatibility alias for IMAGE_VERSION"
     echo "  WEB_PORT=$DEFAULT_WEB_PORT            Override the host port used for the web UI"
+    echo "  WEB_BIND_ADDRESS=127.0.0.1 Host address the web UI is published on (the API has no authentication)"
     echo "  CACHE_DIR                  Override the oc-mirror cache directory (absolute host path, e.g. /tmp/cache)"
     echo ""
     echo "Examples:"

@@ -528,6 +528,7 @@ main() {
             echo ""
             echo "Environment:"
             echo "  WEB_PORT   - Override the host port used for the web UI (default: $DEFAULT_WEB_PORT)"
+            echo "  WEB_BIND_ADDRESS - Host address the web UI is published on (default: 127.0.0.1; the API has no authentication)"
             echo "  IMAGE_NAME - Override the container image (default: registry.ci.openshift.org/ocp/5.0:mirror-gui)"
             echo "  CACHE_DIR  - Override the oc-mirror cache directory (absolute host path, e.g. /tmp/cache)"
             exit 0
