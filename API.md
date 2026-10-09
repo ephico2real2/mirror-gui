@@ -515,17 +515,18 @@ Reload the in-memory operator cache from the current local catalog snapshot or f
 ```
 
 #### GET /api/operators/:operator/dependencies
-Get dependencies for a specific operator.
+Get the dependencies of an operator: package dependencies and required APIs, followed transitively.
 
 **Parameters:**
 - `operator`: Operator name
 
 **Query Parameters:**
 - `catalogUrl` (optional): Specific catalog URL to search. If omitted, searches all catalogs.
+- `channel` (optional): Channel whose head bundle's requirements are used. Defaults to the operator's default channel; an unknown channel also falls back to it.
 
 **Example Request:**
 ```bash
-curl "http://localhost:3000/api/operators/odf-operator/dependencies?catalogUrl=registry.redhat.io/redhat/redhat-operator-index:v4.21"
+curl "http://localhost:3000/api/operators/odf-operator/dependencies?catalogUrl=registry.redhat.io/redhat/redhat-operator-index:v4.21&channel=stable-4.21"
 ```
 
 **Response:**
@@ -533,30 +534,57 @@ curl "http://localhost:3000/api/operators/odf-operator/dependencies?catalogUrl=r
 {
   "operator": "odf-operator",
   "catalogType": "redhat-operator-index",
-  "catalogVersion": "v4.18",
+  "catalogVersion": "v4.21",
+  "channel": "stable-4.21",
+  "resolution": "graph",
   "dependencies": [
     {
       "packageName": "mcg-operator",
-      "versionRange": ">=4.9.0 <=4.17.0",
+      "versionRange": ">=4.9.0 <=4.21.0",
+      "reason": "package",
       "requiredBy": "odf-operator",
-      "catalog": "registry.redhat.io/redhat/redhat-operator-index:v4.18"
+      "defaultChannel": "stable-4.21",
+      "catalog": "registry.redhat.io/redhat/redhat-operator-index:v4.21"
+    },
+    {
+      "packageName": "example-provider",
+      "versionRange": null,
+      "reason": "api",
+      "api": "example.com/v1/Widget",
+      "requiredBy": "mcg-operator",
+      "defaultChannel": "stable"
     }
   ],
-  "count": 1
+  "unresolvedApis": [
+    {
+      "api": "monitoring.coreos.com/v1/ServiceMonitor",
+      "candidates": [],
+      "requiredBy": "odf-operator"
+    }
+  ],
+  "count": 2
 }
 ```
+
+**Response fields:**
+- `dependencies[].reason`: `package` for `olm.package.required`; `api` for an `olm.gvk.required` API that exactly one package in the catalog provides (`api` names it).
+- `dependencies[].requiredBy`: the package that needs it; dependencies of dependencies are included, each followed through its own default channel.
+- `dependencies[].defaultChannel`: the dependency's real default channel from the catalog.
+- `unresolvedApis`: required APIs provided by several packages (`candidates`) or by none in this catalog (empty `candidates`, for example an API the platform serves). They are reported, not guessed.
+- `resolution`: `graph` when the catalog has `dependency-graph.json`; `legacy` for catalog data synced before it existed, where only package dependencies of the default channel head are known.
 
 **Response (no dependencies):**
 ```json
 {
   "operator": "some-operator",
   "dependencies": [],
+  "unresolvedApis": [],
   "message": "No dependencies found for this operator"
 }
 ```
 
 **Notes:**
-- Dependencies are pre-computed during catalog fetch for faster runtime lookups
+- Dependencies are pre-computed during catalog fetch (`dependency-graph.json`) for faster runtime lookups
 - If `catalogUrl` is omitted, searches all available catalogs and returns the first match
 
 ### Operations Management

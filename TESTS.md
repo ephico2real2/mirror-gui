@@ -48,11 +48,11 @@ Server API tests using Supertest against the Express server. Each suite starts a
 | `health.test.ts`              | 1     | `GET /api/health` -- returns `healthy` status, `mirror-gui` service name, valid ISO timestamp             |
 | `catalogs.test.ts`            | 2     | `GET /api/catalogs` -- prefetched catalogs with operator counts, `digest` / `syncedAt` fields, error path |
 | `channels.test.ts`            | 1     | `GET /api/channels` -- returns OCP channel names (stable-4.16 through stable-4.21)                        |
-| `operators.test.ts`           | 15    | `GET /api/operators` -- operator listing, filtering by catalog/version, search, pagination                |
+| `operators.test.ts`           | 20    | `GET /api/operators` -- operator listing, filtering by catalog/version, search, pagination; `GET /api/operators/:operator/dependencies` -- transitive dependencies, required APIs resolved, unresolved APIs reported, requested channel, fallback to `dependencies.json` |
 | `config.test.ts`              | 12    | Config API -- list, save, upload, delete, validate YAML configurations                                    |
 | `configDownload.test.ts`      | 4     | `GET /api/config/download/:filename` -- invalid extension, traversal-safe basename, 404, successful download |
 | `operations.test.ts`          | 7     | Operations API -- list, recent operations, stats (total/successful/failed/running)                        |
-| `operationsLifecycle.test.ts` | 6     | Operations lifecycle -- start, stop, logs, details, SSE streaming, 404 handling                           |
+| `operationsLifecycle.test.ts` | 10    | Operations lifecycle -- start, stop, logs, details, SSE streaming, 404 handling; source TLS verified by default, `skipSourceTlsVerify` opt-in and validation |
 | `settings.test.ts`            | 4     | Settings API -- registries list, cache cleanup, `POST /api/registries/verify` validation                   |
 | `system.test.ts`              | 3     | System API -- path availability, system info (oc-mirror version, architecture, disk space), system status |
 | `pullSecret.test.ts`          | 11    | Pull secret API -- status, content, save/validate, delete, system status / hostDataDir                     |
@@ -67,6 +67,7 @@ Server API tests using Supertest against the Express server. Each suite starts a
 | ------------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `auditFetchCatalogs.test.ts`   | 2     | Tests `scripts/audit-fetch-catalogs.mjs` logic using synthetic fixtures -- detects version metadata mismatches and JSON parse errors                                                                                                                   |
 | `catalogDataIntegrity.test.ts` | 94    | Validates all committed catalog metadata: `catalog-index.json` has all 6 OCP versions and 3 catalog types, all 18 catalogs have valid `operators.json` (with required fields and minimum operator counts), `dependencies.json`, `catalog-info.json`, and optional `digest`/`synced_at` fields |
+| `catalogMetadataGraph.test.ts` | 5     | Runs `scripts/catalog_metadata.py generate` on the synthetic catalog in `tests/fixtures/fbc-dependency-graph` -- per-channel heads, required APIs resolved to their provider, ambiguous/unprovided/self-provided APIs, unchanged `operators.json`/`dependencies.json`, and the generated graph matches the server fixture |
 | `shellcheck.test.ts`           | 7     | Runs ShellCheck on shell scripts when available; skips gracefully otherwise                                                                                                                                                                            |
 
 
@@ -87,6 +88,8 @@ Runs Playwright browser tests using headless Chromium (port 3001 in CI via dev s
 | `settings.spec.ts`           | 5     | Settings page -- Pull Secret/Registry/Cache/Sync Catalogs tabs, key fields visible, sync and clear buttons                       |
 | `configToOperations.spec.ts` | 1     | End-to-end workflow -- saves a YAML config via API, navigates to operations page, confirms it appears                          |
 | `pullSecret.spec.ts`         | 6     | Pull secret -- Dashboard pull secret status, Environment Status label, popover, Pull Secret tab, URL tab navigation, status persistence   |
+| `tlsVerification.spec.ts`    | 3     | Advanced Options -- "Skip TLS verification for source registries" off by default, opt-in sends `skipSourceTlsVerify`, warning popover |
+| `dependencyDetection.spec.ts` | 1    | Mirror Configuration -- auto-added dependencies use their real default channel (no guessed channel), unresolved required APIs shown as a warning |
 
 
 Playwright reports are uploaded as CI artifacts (retained 14 days).
@@ -149,9 +152,9 @@ npm run audit:fetch-catalogs
 | Category         | Files  | Test Cases |
 | ---------------- | ------ | ---------- |
 | Unit             | 3      | 46         |
-| Integration      | 13     | 71         |
-| Scripts          | 3      | 103        |
-| E2E (Playwright) | 8      | 51         |
-| **Total**        | **27** | **271**    |
+| Integration      | 13     | 80         |
+| Scripts          | 4      | 108        |
+| E2E (Playwright) | 10     | 55         |
+| **Total**        | **30** | **289**    |
 
 
