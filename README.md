@@ -61,6 +61,12 @@ Every build path runs `sync-catalogs.sh` to pull the latest Red Hat, Certified, 
 
 Open the URL printed by the script in your browser. By default it uses `http://localhost:3000`, but it automatically selects another free host port if `3000` is already in use. The `Web UI:` line in the script output shows the chosen address.
 
+The web UI listens on `127.0.0.1` only. To use it from another machine, for example when it runs on a bastion, open an SSH tunnel and browse to `http://localhost:3000` locally:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 <user>@<host>
+```
+
 Manage with: `./local-build.sh --stop`, `--restart`, `--status`, `--logs`.
 
 ## Features
@@ -116,6 +122,7 @@ Configure environment preferences across four tabs:
 |----------|-------------|---------|
 | `IMAGE_NAME` | Override the container image name | `mirror-gui:latest` |
 | `WEB_PORT` | Override the host port | `3000` |
+| `WEB_BIND_ADDRESS` | Host address the web UI is published on. The API has no authentication and can return the pull secret, so the default is loopback only; set `0.0.0.0` only on a single-user machine you trust | `127.0.0.1` |
 | `CACHE_DIR` | Override the oc-mirror cache directory (absolute host path) | `./data/cache` |
 
 ## Compatibility

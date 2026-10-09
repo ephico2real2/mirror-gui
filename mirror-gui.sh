@@ -28,6 +28,21 @@ else
     WEB_PORT="$DEFAULT_WEB_PORT"
 fi
 
+# Host address the web UI is published on. The API has no authentication and
+# can return the pull secret, so it listens on loopback only by default. Reach
+# it from another machine with an SSH tunnel:
+#   ssh -L 3000:127.0.0.1:3000 <host>
+# Set WEB_BIND_ADDRESS=0.0.0.0 only on a single-user machine you trust.
+WEB_BIND_ADDRESS="${WEB_BIND_ADDRESS:-127.0.0.1}"
+if [ "$WEB_BIND_ADDRESS" = "localhost" ]; then
+    WEB_BIND_ADDRESS="127.0.0.1"
+fi
+if [ "$WEB_BIND_ADDRESS" = "127.0.0.1" ] || [ "$WEB_BIND_ADDRESS" = "::1" ]; then
+    WEB_HOST_FOR_URL="localhost"
+else
+    WEB_HOST_FOR_URL="$WEB_BIND_ADDRESS"
+fi
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -107,6 +122,14 @@ port_is_in_use() {
     fi
 
     return 1
+}
+
+# Podman wants an IPv6 publish address in brackets.
+publish_address() {
+    case "$WEB_BIND_ADDRESS" in
+        *:*) echo "[$WEB_BIND_ADDRESS]" ;;
+        *) echo "$WEB_BIND_ADDRESS" ;;
+    esac
 }
 
 find_available_port() {
@@ -291,8 +314,11 @@ run_container() {
 
         print_status "Starting container: $CONTAINER_NAME"
         print_status "Image: $image_tag"
-        print_status "Web UI: http://localhost:$WEB_PORT"
-        print_status "API: http://localhost:$WEB_PORT/api"
+        print_status "Web UI: http://$WEB_HOST_FOR_URL:$WEB_PORT"
+        print_status "API: http://$WEB_HOST_FOR_URL:$WEB_PORT/api"
+        if [ "$WEB_HOST_FOR_URL" != "localhost" ]; then
+            print_warning "WEB_BIND_ADDRESS=$WEB_BIND_ADDRESS: the unauthenticated API (including the pull secret) is reachable from the network"
+        fi
 
         local pull_secret_mount=""
         if [ "$PULL_SECRET_AVAILABLE" = "true" ]; then
@@ -311,7 +337,7 @@ run_container() {
         set +e
         run_output="$($CONTAINER_ENGINE run -d \
             --name "$CONTAINER_NAME" \
-            -p "$WEB_PORT:$CONTAINER_PORT" \
+            -p "$(publish_address):$WEB_PORT:$CONTAINER_PORT" \
             -v "$(pwd)/$DATA_DIR:/app/data:z" \
             $pull_secret_mount \
             $cache_volume_mount \
