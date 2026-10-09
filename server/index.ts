@@ -43,6 +43,7 @@ interface OperationRecord {
 
 interface OptionalFlagsBody {
   removeSignatures?: boolean;
+  skipSourceTlsVerify?: boolean;
   imageTimeout?: string;
   retryDelay?: string;
   retryTimes?: number;
@@ -50,6 +51,7 @@ interface OptionalFlagsBody {
 
 const OPTIONAL_FLAG_KEYS = new Set([
   'removeSignatures',
+  'skipSourceTlsVerify',
   'imageTimeout',
   'retryDelay',
   'retryTimes',
@@ -95,6 +97,19 @@ function buildOptionalFlagArgs(
     }
     if (typed.removeSignatures) {
       additionalArgs.push('--remove-signatures');
+    }
+  }
+
+  // TLS verification of the source registries is on unless the user opts out
+  // for this one operation (e.g. a lab registry with a self-signed certificate).
+  // The destination is always a local directory (file://), so there is no
+  // destination TLS to configure.
+  if (typed.skipSourceTlsVerify != null) {
+    if (typeof typed.skipSourceTlsVerify !== 'boolean') {
+      return { ok: false, error: 'optionalFlags.skipSourceTlsVerify must be a boolean' };
+    }
+    if (typed.skipSourceTlsVerify) {
+      additionalArgs.push('--src-tls-verify=false');
     }
   }
 
@@ -1729,8 +1744,6 @@ app.post('/api/operations/start', async (req: Request, res: Response) => {
   const child = spawn('oc-mirror', [
       '--v2',
       '--config', configPath,
-      '--dest-tls-verify=false',
-      '--src-tls-verify=false',
       '--cache-dir', cacheDir,
       '--authfile', AUTHFILE_PATH,
       ...additionalArgs,

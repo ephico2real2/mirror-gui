@@ -84,6 +84,7 @@ interface Operation {
 
 interface OptionalFlags {
   removeSignatures: boolean;
+  skipSourceTlsVerify: boolean;
   imageTimeoutEnabled: boolean;
   imageTimeoutMinutes: string;
   imageTimeoutSeconds: string;
@@ -95,6 +96,7 @@ interface OptionalFlags {
 
 interface OptionalFlagsPayload {
   removeSignatures?: boolean;
+  skipSourceTlsVerify?: boolean;
   imageTimeout?: string;
   retryDelay?: string;
   retryTimes?: number;
@@ -102,6 +104,7 @@ interface OptionalFlagsPayload {
 
 const DEFAULT_OPTIONAL_FLAGS: OptionalFlags = {
   removeSignatures: false,
+  skipSourceTlsVerify: false,
   imageTimeoutEnabled: false,
   imageTimeoutMinutes: '10',
   imageTimeoutSeconds: '0',
@@ -229,6 +232,10 @@ const buildOptionalFlagsPayload = (flags: OptionalFlags): OptionalFlagsPayload |
 
   if (flags.removeSignatures) {
     payload.removeSignatures = true;
+  }
+
+  if (flags.skipSourceTlsVerify) {
+    payload.skipSourceTlsVerify = true;
   }
 
   if (flags.imageTimeoutEnabled) {
@@ -1012,6 +1019,27 @@ const MirrorOperations: React.FC = () => {
                   setOptionalFlags((prev) => ({ ...prev, removeSignatures: checked }))
                 }
                 aria-label="Enable remove signatures"
+              />
+            </FormGroup>
+
+            <FormGroup
+              label={
+                <FormGroupInfoLabel
+                  text="Skip TLS verification for source registries"
+                  ariaLabel="More info about skipping TLS verification"
+                  bodyContent="Not recommended. When enabled, oc-mirror does not check the certificates of the registries it pulls from (--src-tls-verify=false), so an interception on the network path goes unnoticed. Use it only for a lab registry with a self-signed certificate; otherwise add the registry's CA to the trust store instead."
+                />
+              }
+              fieldId="flag-skip-source-tls-verify"
+              className="pf-v6-u-mb-md"
+            >
+              <Switch
+                id="flag-skip-source-tls-verify"
+                isChecked={optionalFlags.skipSourceTlsVerify}
+                onChange={(_e, checked) =>
+                  setOptionalFlags((prev) => ({ ...prev, skipSourceTlsVerify: checked }))
+                }
+                aria-label="Skip TLS verification for source registries"
               />
             </FormGroup>
 

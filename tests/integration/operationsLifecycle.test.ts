@@ -150,6 +150,67 @@ describe('Operations lifecycle API', () => {
     });
   });
 
+  describe('TLS verification of source registries', () => {
+    const runAndCaptureArgs = async (configName: string, optionalFlags?: Record<string, unknown>) => {
+      const argsFile = path.join(os.tmpdir(), `oc-mirror-args-tls-${Date.now()}-${configName}.txt`);
+      process.env.OC_MIRROR_ARGS_FILE = argsFile;
+      try {
+        await fs.promises.rm(argsFile, { force: true });
+        const configRes = await request.post('/api/config/save').send({
+          config:
+            'kind: ImageSetConfiguration\napiVersion: mirror.openshift.io/v2alpha1\nmirror:\n  platform: {}\n  operators: []\n  additionalImages: []',
+          name: configName,
+        });
+        expect(configRes.status).toBe(200);
+        const res = await request
+          .post('/api/operations/start')
+          .send({ configFile: configName, ...(optionalFlags ? { optionalFlags } : {}) });
+        expect(res.status).toBe(200);
+        let argsContent = '';
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          try {
+            argsContent = await fs.promises.readFile(argsFile, 'utf8');
+            if (argsContent.includes('file:')) break;
+          } catch {
+            // file may not exist yet
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return argsContent.split('\n').map((line) => line.trim()).filter(Boolean);
+      } finally {
+        delete process.env.OC_MIRROR_ARGS_FILE;
+        await fs.promises.rm(argsFile, { force: true });
+      }
+    };
+
+    it('verifies TLS by default: no tls-verify flags are passed', async () => {
+      const args = await runAndCaptureArgs('tls-default.yaml');
+      expect(args.some((arg) => arg.startsWith('file:'))).toBe(true);
+      expect(args.filter((arg) => arg.includes('tls-verify'))).toEqual([]);
+    });
+
+    it('passes --src-tls-verify=false only when skipSourceTlsVerify is true', async () => {
+      const args = await runAndCaptureArgs('tls-skip.yaml', { skipSourceTlsVerify: true });
+      expect(args).toContain('--src-tls-verify=false');
+      expect(args.some((arg) => arg.startsWith('--dest-tls-verify'))).toBe(false);
+      const mirrorUrlIndex = args.findIndex((arg) => arg.startsWith('file:'));
+      expect(args.indexOf('--src-tls-verify=false')).toBeLessThan(mirrorUrlIndex);
+    });
+
+    it('keeps TLS verification when skipSourceTlsVerify is false', async () => {
+      const args = await runAndCaptureArgs('tls-false.yaml', { skipSourceTlsVerify: false });
+      expect(args.filter((arg) => arg.includes('tls-verify'))).toEqual([]);
+    });
+
+    it('rejects a non-boolean skipSourceTlsVerify', async () => {
+      const res = await request
+        .post('/api/operations/start')
+        .send({ configFile: 'tls-default.yaml', optionalFlags: { skipSourceTlsVerify: 'yes' } });
+      expect(res.status).toBe(400);
+      expect(JSON.stringify(res.body)).toContain('skipSourceTlsVerify');
+    });
+  });
+
   describe('POST /api/operations/:id/stop', () => {
     it('returns success and updates operation to stopped', async () => {
       const res = await request.post(`/api/operations/${seededOpId}/stop`);

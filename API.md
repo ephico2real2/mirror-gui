@@ -614,6 +614,10 @@ Start a new mirror operation.
   - If not provided or empty, defaults to `default`
   - Must be alphanumeric with dashes and underscores only (no slashes or special characters)
   - Examples: `default`, `odf`, `production`, `test-123`
+- `optionalFlags` (object, optional): extra oc-mirror flags for this operation only:
+  - `removeSignatures` (boolean): `--remove-signatures`
+  - `skipSourceTlsVerify` (boolean, default `false`): `--src-tls-verify=false`. TLS certificates of the source registries are verified unless this is `true`; use it only for a lab registry with a self-signed certificate. The destination is a local directory, so there is no destination TLS setting.
+  - `imageTimeout`, `retryDelay` (Go duration strings such as `10m`, `30s`) and `retryTimes` (non-negative integer)
 
 **Response:**
 ```json
